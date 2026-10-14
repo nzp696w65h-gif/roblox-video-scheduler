@@ -1,3 +1,4 @@
+
 name: Roblox Video Scheduler
 
 on:
@@ -37,6 +38,11 @@ jobs:
 
           index = state.get("next_index", 0) % len(enabled)
           video = enabled[index]
+
+          video_path = Path(video["video"])
+
+          if not video_path.is_file():
+              raise SystemExit(f"Video file not found: {video_path}")
 
           print("PREVIEW ONLY - nothing will be posted.")
           print("Selected video:", video["video"])
