@@ -1,0 +1,96 @@
+
+name: Buffer Connection Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-buffer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Buffer API connection
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+
+          endpoint = "https://api.buffer.com"
+          token = os.environ["BUFFER_API_KEY"]
+
+          def query_buffer(query):
+              request = urllib.request.Request(
+                  endpoint,
+                  data=json.dumps({"query": query}).encode(),
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  result = json.loads(response.read().decode())
+
+              if result.get("errors"):
+                  raise RuntimeError(
+                      json.dumps(result["errors"], indent=2)
+                  )
+
+              return result["data"]
+
+          try:
+              data = query_buffer("""
+                  query GetOrganizations {
+                    account {
+                      organizations {
+                        id
+                        name
+                      }
+                    }
+                  }
+              """)
+
+              organizations = data["account"]["organizations"]
+
+              if not organizations:
+                  print("Connected, but no organizations were found.")
+                  raise SystemExit(1)
+
+              for organization in organizations:
+                  print("Organization:", organization["name"])
+
+                  org_id = json.dumps(organization["id"])
+                  channel_query = f"""
+                      query GetChannels {{
+                        channels(input: {{
+                          organizationId: {org_id}
+                        }}) {{
+                          name
+                          service
+                        }}
+                      }}
+                  """
+
+                  channels = query_buffer(channel_query)["channels"]
+
+                  for channel in channels:
+                      print(
+                          "Channel:",
+                          channel["name"],
+                          "| Platform:",
+                          channel["service"]
+                      )
+
+              print("SUCCESS: Buffer API connection verified.")
+
+          except Exception as error:
+              print("Buffer connection test failed:", error)
+              raise SystemExit(1)
+          PY
