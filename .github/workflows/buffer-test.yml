@@ -10,7 +10,7 @@ jobs:
   test-buffer:
     runs-on: ubuntu-latest
     steps:
-      - name: Diagnose Buffer API connection
+      - name: List Buffer channels
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
         run: |
@@ -18,71 +18,66 @@ jobs:
           import json
           import os
           import urllib.request
-          import urllib.error
 
-          token = os.environ.get("BUFFER_API_KEY", "")
+          token = os.environ["BUFFER_API_KEY"]
+          endpoint = "https://api.buffer.com"
 
-          if not token:
-              print("ERROR: BUFFER_API_KEY is missing or empty.")
-              raise SystemExit(1)
+          def query_buffer(query):
+              request = urllib.request.Request(
+                  endpoint,
+                  data=json.dumps({"query": query}).encode(),
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
 
-          print("Secret exists. Sending test request to Buffer...")
-
-          query = """
-          query GetOrganizations {
-            account {
-              organizations {
-                id
-                name
-              }
-            }
-          }
-          """
-
-          request = urllib.request.Request(
-              "https://api.buffer.com",
-              data=json.dumps({"query": query}).encode("utf-8"),
-              headers={
-                  "Authorization": "Bearer " + token,
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-
-          try:
               with urllib.request.urlopen(request, timeout=30) as response:
-                  print("HTTP status:", response.status)
-                  body = response.read().decode("utf-8")
-          except urllib.error.HTTPError as error:
-              print("HTTP status:", error.code)
-              body = error.read().decode("utf-8", errors="replace")
-          except Exception as error:
-              print("Request failed:", type(error).__name__, str(error))
-              raise SystemExit(1)
+                  result = json.loads(response.read().decode())
 
-          try:
-              data = json.loads(body)
-              print("Buffer response:")
-              print(json.dumps(data, indent=2))
+              if result.get("errors"):
+                  raise RuntimeError(
+                      json.dumps(result["errors"], indent=2)
+                  )
 
-              if data.get("errors"):
-                  print("GraphQL returned errors.")
-                  raise SystemExit(1)
+              return result["data"]
 
-              organizations = data.get("data", {}).get(
-                  "account", {}
-              ).get("organizations", [])
+          organizations = query_buffer("""
+              query {
+                account {
+                  organizations {
+                    id
+                    name
+                  }
+                }
+              }
+          """)["account"]["organizations"]
 
-              if not organizations:
-                  print("No organizations returned. Check the response above.")
-                  raise SystemExit(1)
+          for organization in organizations:
+              print("Organization:", organization["name"])
 
-              print("SUCCESS: Buffer authentication works.")
-              print("Organizations found:", len(organizations))
+              org_id = json.dumps(organization["id"])
+              query = f"""
+                  query {{
+                    channels(input: {{
+                      organizationId: {org_id}
+                    }}) {{
+                      id
+                      name
+                      service
+                    }}
+                  }}
+              """
 
-          except json.JSONDecodeError:
-              print("Buffer returned a non-JSON response:")
-              print(body[:3000])
-              raise SystemExit(1)
+              channels = query_buffer(query)["channels"]
+              print("Channels found:", len(channels))
+
+              for channel in channels:
+                  print(
+                      "Channel:", channel["name"],
+                      "| Platform:", channel["service"]
+                  )
+
+          print("SUCCESS: Channel lookup complete.")
           PY
-
