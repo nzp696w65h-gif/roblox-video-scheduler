@@ -1,0 +1,86 @@
+
+name: Test Buffer Video Draft
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-video-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create video draft in Buffer
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+
+          query = """
+          mutation CreateVideoDraft {
+            createPost(input: {
+              text: "TEST ONLY - Roblox video hosting check"
+              channelId: "6ad0e090778b240e2f1948ac"
+              schedulingType: automatic
+              mode: addToQueue
+              saveToDraft: true
+              assets: [
+                {
+                  video: {
+                    url: "https://raw.githubusercontent.com/nzp696w65h-gif/roblox-video-scheduler/main/videos/01.mp4"
+                  }
+                }
+              ]
+            }) {
+              ... on PostActionSuccess {
+                post {
+                  id
+                  text
+                  assets {
+                    source
+                  }
+                }
+              }
+              ... on MutationError {
+                message
+              }
+            }
+          }
+          """
+
+          request = urllib.request.Request(
+              "https://api.buffer.com",
+              data=json.dumps({"query": query}).encode(),
+              headers={
+                  "Authorization": f"Bearer {os.environ['BUFFER_API_KEY']}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  result = json.loads(response.read().decode())
+              print(json.dumps(result, indent=2))
+          except urllib.error.HTTPError as error:
+              print("HTTP status:", error.code)
+              print(error.read().decode())
+              raise SystemExit(1)
+
+          if result.get("errors"):
+              raise SystemExit(json.dumps(result["errors"], indent=2))
+
+          payload = result.get("data", {}).get("createPost", {})
+          if payload.get("message"):
+              raise SystemExit("Buffer rejected the draft: " + payload["message"])
+
+          if not payload.get("post"):
+              raise SystemExit("No draft was returned. Check the response above.")
+
+          print("SUCCESS: Video draft created. It has NOT been published.")
+          PY
