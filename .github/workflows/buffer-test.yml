@@ -76,7 +76,8 @@ jobs:
               for channel in channels:
                   print(
                       "Channel:", channel["name"],
-                      "| Platform:", channel["service"]
+                      "| Platform:", channel["service"],
+                      "| ID:", channel["id"]
                   )
 
           print("SUCCESS: Channel lookup complete.")
