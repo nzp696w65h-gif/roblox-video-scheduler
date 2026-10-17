@@ -35,6 +35,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import random
           from pathlib import Path
           from urllib.request import Request, urlopen
 
@@ -49,8 +50,17 @@ jobs:
 
           state_path = Path("state.json")
           state = json.loads(state_path.read_text())
-          index = state.get("next_index", 0) % len(enabled)
-          video = enabled[index]
+          last_video = state.get("last_video")
+
+          choices = [
+              video for video in enabled
+              if video["video"] != last_video
+          ]
+
+          if not choices:
+              choices = enabled
+
+          video = random.choice(choices)
 
           video_path = Path(video["video"])
           if not video_path.is_file():
@@ -62,6 +72,18 @@ jobs:
               + video["video"]
           )
 
+          for field in ("title", "url", "hashtags"):
+              if not isinstance(video.get(field), str):
+                  raise SystemExit(
+                      f"Missing or invalid '{field}' for {video['video']}"
+                  )
+
+          caption = (
+              video["title"] + "\n\n"
+              + video["url"] + "\n\n"
+              + video["hashtags"]
+          )
+
           channels = {
               "CondosPublic": "6ad0e090778b240e2f1948ac",
               "Roblox4Adults": "6ad0df6a778b240e2f193961",
@@ -69,7 +91,7 @@ jobs:
           }
 
           print("Selected video:", video["video"])
-          print("Caption:", video["caption"])
+          print("Caption:", caption)
           print("Enabled videos:", len(enabled))
 
           if os.environ.get("PUBLISH", "").lower() != "true":
@@ -81,18 +103,15 @@ jobs:
               raise SystemExit("BUFFER_API_KEY secret is missing.")
 
           def create_post(channel_name, channel_id):
-              text = json.dumps(video["caption"], ensure_ascii=False)
-              url = json.dumps(video_url)
-
               query = f"""
               mutation CreateRobloxVideoPost {{
                 createPost(input: {{
-                  text: {text}
+                  text: {json.dumps(caption, ensure_ascii=False)}
                   channelId: "{channel_id}"
                   schedulingType: automatic
                   mode: addToQueue
                   assets: [
-                    {{ video: {{ url: {url} }} }}
+                    {{ video: {{ url: {json.dumps(video_url)} }} }}
                   ]
                 }}) {{
                   ... on PostActionSuccess {{
@@ -128,6 +147,7 @@ jobs:
                   )
 
               outcome = result.get("data", {}).get("createPost")
+
               if not outcome or "message" in outcome:
                   raise RuntimeError(
                       f"{channel_name}: "
@@ -146,13 +166,12 @@ jobs:
                   f"Scheduled: {post.get('dueAt')}"
               )
 
-          # Do not advance rotation unless every channel succeeds.
           for name, channel_id in channels.items():
               create_post(name, channel_id)
 
-          state["next_index"] = (index + 1) % len(enabled)
+          state["last_video"] = video["video"]
           state_path.write_text(json.dumps(state, indent=2) + "\n")
-          print("All 3 posts created. Rotation advanced.")
+          print("All 3 posts created. Rotation state updated.")
           PY
 
       - name: Save rotation progress
@@ -163,7 +182,7 @@ jobs:
           git add state.json
 
           if git diff --cached --quiet; then
-            echo "No rotation changes to save."
+            echo "No state changes to save."
             exit 0
           fi
 
