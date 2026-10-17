@@ -1,0 +1,93 @@
+name: Test Other Channel Video Drafts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create-drafts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create video drafts
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+
+          token = os.environ["BUFFER_API_KEY"]
+          endpoint = "https://api.buffer.com"
+          video_url = "https://raw.githubusercontent.com/nzp696w65h-gif/roblox-video-scheduler/main/videos/01.mp4"
+
+          channels = [
+              ("Roblox4Adults", "6ad0df6a778b240e2f193961"),
+              ("ALLROBLOXCONDOS", "6acc90a9778b240e2fe3ee2a"),
+          ]
+
+          for name, channel_id in channels:
+              query = f"""
+              mutation CreateDraft {{
+                createPost(input: {{
+                  text: "TEST ONLY - Roblox video hosting check"
+                  channelId: {json.dumps(channel_id)}
+                  schedulingType: automatic
+                  mode: addToQueue
+                  saveToDraft: true
+                  assets: [
+                    {{
+                      video: {{
+                        url: {json.dumps(video_url)}
+                      }}
+                    }}
+                  ]
+                }}) {{
+                  ... on PostActionSuccess {{
+                    post {{ id text }}
+                  }}
+                  ... on MutationError {{
+                    message
+                  }}
+                }}
+              }}
+              """
+
+              request = urllib.request.Request(
+                  endpoint,
+                  data=json.dumps({"query": query}).encode(),
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      result = json.loads(response.read().decode())
+              except urllib.error.HTTPError as error:
+                  print("HTTP error:", error.code, error.read().decode())
+                  raise SystemExit(1)
+
+              if result.get("errors"):
+                  raise SystemExit(json.dumps(result["errors"], indent=2))
+
+              payload = result["data"]["createPost"]
+
+              if payload.get("message"):
+                  raise SystemExit(
+                      f"{name}: " + payload["message"]
+                  )
+
+              post = payload.get("post")
+              if not post:
+                  raise SystemExit(f"{name}: no draft returned")
+
+              print(f"SUCCESS: Draft created for {name}; ID: {post['id']}")
+
+          print("SUCCESS: Both test drafts created. Nothing was published.")
+          PY
