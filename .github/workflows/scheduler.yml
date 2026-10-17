@@ -5,26 +5,40 @@ on:
   schedule:
     - cron: "0 10,17 * * *"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Actually create posts in Buffer"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: roblox-video-scheduler
+  cancel-in-progress: false
+
 jobs:
-  select-video:
+  select-and-post:
     runs-on: ubuntu-latest
 
     steps:
       - name: Get repository files
         uses: actions/checkout@v5
 
-      - name: Select next video
+      - name: Select video and post to Buffer
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish == true }}
         run: |
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
+          from urllib.request import Request, urlopen
 
           videos = json.loads(Path("videos.json").read_text())
-
           enabled = [
               video for video in videos
               if video.get("enabled", True)
@@ -35,22 +49,110 @@ jobs:
 
           state_path = Path("state.json")
           state = json.loads(state_path.read_text())
-
           index = state.get("next_index", 0) % len(enabled)
           video = enabled[index]
 
           video_path = Path(video["video"])
-
           if not video_path.is_file():
               raise SystemExit(f"Video file not found: {video_path}")
 
-          print("PREVIEW ONLY - nothing will be posted.")
+          video_url = (
+              "https://raw.githubusercontent.com/"
+              "nzp696w65h-gif/roblox-video-scheduler/main/"
+              + video["video"]
+          )
+
+          channels = {
+              "CondosPublic": "6ad0e090778b240e2f1948ac",
+              "Roblox4Adults": "6ad0df6a778b240e2f193961",
+              "ALLROBLOXCONDOS": "6acc90a9778b240e2fe3ee2a",
+          }
+
           print("Selected video:", video["video"])
           print("Caption:", video["caption"])
+          print("Enabled videos:", len(enabled))
+
+          if os.environ.get("PUBLISH", "").lower() != "true":
+              print("PREVIEW ONLY - no posts created and rotation unchanged.")
+              raise SystemExit(0)
+
+          token = os.environ.get("BUFFER_API_KEY")
+          if not token:
+              raise SystemExit("BUFFER_API_KEY secret is missing.")
+
+          def create_post(channel_name, channel_id):
+              text = json.dumps(video["caption"], ensure_ascii=False)
+              url = json.dumps(video_url)
+
+              query = f"""
+              mutation CreateRobloxVideoPost {{
+                createPost(input: {{
+                  text: {text}
+                  channelId: "{channel_id}"
+                  schedulingType: automatic
+                  mode: addToQueue
+                  assets: [
+                    {{ video: {{ url: {url} }} }}
+                  ]
+                }}) {{
+                  ... on PostActionSuccess {{
+                    post {{
+                      id
+                      text
+                      dueAt
+                    }}
+                  }}
+                  ... on MutationError {{
+                    message
+                  }}
+                }}
+              }}
+              """
+
+              request = Request(
+                  "https://api.buffer.com",
+                  data=json.dumps({"query": query}).encode(),
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+
+              with urlopen(request, timeout=60) as response:
+                  result = json.loads(response.read().decode())
+
+              if result.get("errors"):
+                  raise RuntimeError(
+                      f"{channel_name}: {result['errors']}"
+                  )
+
+              outcome = result.get("data", {}).get("createPost")
+              if not outcome or "message" in outcome:
+                  raise RuntimeError(
+                      f"{channel_name}: "
+                      f"{outcome.get('message', 'Unknown Buffer error') if outcome else 'No result returned'}"
+                  )
+
+              post = outcome.get("post")
+              if not post:
+                  raise RuntimeError(
+                      f"{channel_name}: Buffer returned no post."
+                  )
+
+              print(
+                  f"SUCCESS: {channel_name} | "
+                  f"Post ID: {post['id']} | "
+                  f"Scheduled: {post.get('dueAt')}"
+              )
+
+          # Do not advance rotation unless every channel succeeds.
+          for name, channel_id in channels.items():
+              create_post(name, channel_id)
 
           state["next_index"] = (index + 1) % len(enabled)
-
           state_path.write_text(json.dumps(state, indent=2) + "\n")
+          print("All 3 posts created. Rotation advanced.")
           PY
 
       - name: Save rotation progress
@@ -61,7 +163,7 @@ jobs:
           git add state.json
 
           if git diff --cached --quiet; then
-            echo "No state changes to save."
+            echo "No rotation changes to save."
             exit 0
           fi
 
