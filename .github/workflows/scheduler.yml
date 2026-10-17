@@ -3,7 +3,7 @@ name: Roblox Video Scheduler
 
 on:
   schedule:
-    - cron: "0 10,17 * * *"
+    - cron: "0 8,15 * * *"
   workflow_dispatch:
     inputs:
       publish:
