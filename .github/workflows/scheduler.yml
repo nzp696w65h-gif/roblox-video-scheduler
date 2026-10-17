@@ -40,6 +40,7 @@ jobs:
           from urllib.request import Request, urlopen
 
           videos = json.loads(Path("videos.json").read_text())
+
           enabled = [
               video for video in videos
               if video.get("enabled", True)
@@ -50,17 +51,17 @@ jobs:
 
           state_path = Path("state.json")
           state = json.loads(state_path.read_text())
-          last_video = state.get("last_video")
 
-          choices = [
+          last_video = state.get("last_video")
+          candidates = [
               video for video in enabled
               if video["video"] != last_video
           ]
 
-          if not choices:
-              choices = enabled
+          if not candidates:
+              candidates = enabled
 
-          video = random.choice(choices)
+          video = random.choice(candidates)
 
           video_path = Path(video["video"])
           if not video_path.is_file():
@@ -72,14 +73,9 @@ jobs:
               + video["video"]
           )
 
-          for field in ("title", "url", "hashtags"):
-              if not isinstance(video.get(field), str):
-                  raise SystemExit(
-                      f"Missing or invalid '{field}' for {video['video']}"
-                  )
-
           caption = (
               video["title"] + "\n\n"
+              + video["cta"] + "\n"
               + video["url"] + "\n\n"
               + video["hashtags"]
           )
@@ -91,11 +87,11 @@ jobs:
           }
 
           print("Selected video:", video["video"])
-          print("Caption:", caption)
           print("Enabled videos:", len(enabled))
+          print("Caption:\n" + caption)
 
           if os.environ.get("PUBLISH", "").lower() != "true":
-              print("PREVIEW ONLY - no posts created and rotation unchanged.")
+              print("PREVIEW ONLY - no posts created; rotation unchanged.")
               raise SystemExit(0)
 
           token = os.environ.get("BUFFER_API_KEY")
@@ -128,9 +124,11 @@ jobs:
               }}
               """
 
+              payload = json.dumps({"query": query}).encode("utf-8")
+
               request = Request(
                   "https://api.buffer.com",
-                  data=json.dumps({"query": query}).encode(),
+                  data=payload,
                   headers={
                       "Authorization": f"Bearer {token}",
                       "Content-Type": "application/json",
@@ -139,42 +137,43 @@ jobs:
               )
 
               with urlopen(request, timeout=60) as response:
-                  result = json.loads(response.read().decode())
+                  result = json.loads(response.read().decode("utf-8"))
 
               if result.get("errors"):
                   raise RuntimeError(
-                      f"{channel_name}: {result['errors']}"
+                      f"{channel_name}: {json.dumps(result['errors'])}"
                   )
 
-              outcome = result.get("data", {}).get("createPost")
+              action = result.get("data", {}).get("createPost", {})
 
-              if not outcome or "message" in outcome:
+              if action.get("message"):
                   raise RuntimeError(
-                      f"{channel_name}: "
-                      f"{outcome.get('message', 'Unknown Buffer error') if outcome else 'No result returned'}"
+                      f"{channel_name}: {action['message']}"
                   )
 
-              post = outcome.get("post")
+              post = action.get("post")
               if not post:
                   raise RuntimeError(
                       f"{channel_name}: Buffer returned no post."
                   )
 
               print(
-                  f"SUCCESS: {channel_name} | "
-                  f"Post ID: {post['id']} | "
-                  f"Scheduled: {post.get('dueAt')}"
+                  f"Created post for {channel_name}: "
+                  f"{post.get('id')} | due: {post.get('dueAt')}"
               )
 
           for name, channel_id in channels.items():
               create_post(name, channel_id)
 
           state["last_video"] = video["video"]
-          state_path.write_text(json.dumps(state, indent=2) + "\n")
+          state_path.write_text(
+              json.dumps(state, indent=2) + "\n"
+          )
+
           print("All 3 posts created. Rotation state updated.")
-          PY
 
       - name: Save rotation progress
+        if: ${{ success() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
