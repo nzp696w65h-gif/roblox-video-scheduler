@@ -75,8 +75,7 @@ jobs:
 
           caption = (
               video["title"] + "\n\n"
-              + video["cta"] + "\n"
-              + video["url"] + "\n\n"
+              + video["cta"] + "\n\n"
               + video["hashtags"]
           )
 
